@@ -1,0 +1,54 @@
+# ============================================================
+# 只提交代码与脱敏样例。下面这些都会含真实信息，绝不提交。
+# ============================================================
+
+# ===== 真实配置（含 cookie）：绝不入库 =====
+# config.example.json 是可提交的脱敏模板
+config.json
+config.json.bak*
+config.json.*.bak
+
+# ===== 真实名单与工资表（含 UID / 用户名 / 薪资）=====
+roster*.csv
+!roster.example.csv
+*.xlsx
+roster*.bak
+payroll_*.csv
+
+# ===== 发放台账（含 UID / 用户名 / 金额）=====
+payout_ledger.jsonl
+payout_log.jsonl
+
+# ===== 站点响应快照（含个人信息）与判定失败存档 =====
+# 只放行离线自测用的 *.sample.html
+samples/*.html
+!samples/*.sample.html
+
+# ===== 运行产物 =====
+logs/
+*.log
+
+# ===== 项目工作记忆（可能含真实名单）=====
+.workbuddy/
+
+# ===== Python =====
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+
+# ===== PyInstaller 打包产物 =====
+build/
+dist/
+*.spec
+
+# ===== 编辑器 / 操作系统 =====
+.vscode/
+.idea/
+.codebuddy/
+.DS_Store
+Thumbs.db
+
+# ===== Office / WPS 的临时锁文件 =====
+~$*

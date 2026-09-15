@@ -1,0 +1,33 @@
+<div class="navbar"><font class = 'color_bonus'>G值 </font>[<a href="mybonus.php">使用</a>]: 10,000,000.0</div>
+<!-- 离线自测样例：模拟 NexusPHP /mybonus.php 的「赠送魔力值」表单。
+     注意：这是我自己按 NexusPHP 常见写法构造的假数据，
+     真实字段名以 probe.py 探测你站点后 dump 出来的为准。 -->
+<table width="100%" class="main" border="1" cellspacing="0" cellpadding="5">
+<tr><td class="embedded">
+  <h2>赠送魔力值</h2>
+  <p>可能你不需要魔力值，为什么不把它送给那些需要的人呢？你可以把自己的魔力值作为礼物送给别人。交易完成后，你的魔力值会减少，礼物接收者的魔力值则会增加。同时，接收者会收到一条关于你的馈赠的短讯。</p>
+  <p>注意：系统向礼物接收者索取 4 个魔力值 + 10% * 赠送额的魔力值作为税收。例如，当你选择赠送 100 个魔力值，接收者实际只收到 86 个魔力值。</p>
+  <form method="post" action="mybonus.php">
+    <input type="hidden" name="action" value="gift" />
+    <table width="100%" border="1" cellspacing="0" cellpadding="5">
+      <tr>
+        <td class="rowhead">用户名:</td>
+        <td class="rowfollow"><input type="text" name="username" size="30" /></td>
+      </tr>
+      <tr>
+        <td class="rowhead">赠送量:</td>
+        <td class="rowfollow"><input type="text" name="seedbonus" size="10" /> 个魔力值！</td>
+      </tr>
+      <tr>
+        <td class="rowhead">留言:</td>
+        <td class="rowfollow"><input type="text" name="message" size="60" /></td>
+      </tr>
+      <tr>
+        <td colspan="2" class="toolbox" align="center">
+          <input type="submit" value="赠送" class="btn" />
+        </td>
+      </tr>
+    </table>
+  </form>
+</td></tr>
+</table>

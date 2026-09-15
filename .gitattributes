@@ -1,0 +1,4 @@
+# 源码 / 文档 / 配置一律 LF —— 避免跨平台换行符来回抖动。
+# samples/ 下的快照是从站点抓下来的原始字节，不做转换。
+* text=auto eol=lf
+samples/*.html -text

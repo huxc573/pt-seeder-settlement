@@ -1,0 +1,154 @@
+{
+  // ==========================================================================
+  // PT 保种组工资发放工具 · 唯一配置文件
+  //
+  // 本文件是**可以直接开源**的模板，不含任何私密信息。
+  // 复制成 config.json 再改；config.json 在 .gitignore 里，不会被提交。
+  // 跑 `python login.py` 会自动生成 config.json 并填好 cookie 和 uid。
+  //
+  // 语法说明：这是 JSONC —— 支持 // 行注释、/* */ 块注释、以及尾随逗号。
+  //          官网标准 JSON 不允许注释，本工具自己做了宽容解析。
+  // ==========================================================================
+
+  // ------------------------------------------------------------------ 站点
+  // 站点地址。装在子目录就连子目录一起写，例如 https://host/nexusphp
+  "base_url": "https://pt.example.com",
+
+  // 接口路径。三种写法：
+  //   以 / 开头      → 相对站点**根域**（主站和后台不同目录时用这个）
+  //   以 http(s)://  → 原样使用
+  //   其他           → 相对 base_url
+  // 可用占位符：{uid} {page}
+  // 各站二次开发版本不同，没有通用默认值，第一次用请对着浏览器地址栏核对一遍。
+  "endpoints": {
+    "login":        "login.php",                                                          // 登录页（展示表单用）
+    "takelogin":    "takelogin.php",                                                       // 登录表单真正提交的地址
+    "user_details": "userdetails.php?id={uid}",                                            // 个人页：昵称 + 做种汇总「N 条记录 | 总大小」—— 考核数据主要从这来
+    "seeding_list": "getusertorrentlistajax.php?userid={uid}&type=seeding&page={page}",    // 可不配：个人页解析不出汇总行时的兜底
+    "gift_bonus":   "mybonus.php"                                                          // 赠送魔力值页面
+  },
+
+  // NexusPHP 的登录 cookie 名，只作参考/备用；界面上「获取cookie」走剪贴板，
+  // 粘贴来的整行照收、不按名字筛。
+  // 老站是下面这三个；如果你的站用的是 nexusphp_session / XSRF-TOKEN 这类新式
+  // cookie，把列表改成站点实际的名字（F12 → Application → Cookies 里看）。
+  "cookie_names": ["c_secure_uid", "c_secure_pass", "c_secure_login"],
+
+  // ↓↓↓ 由 login.py 自动填写，你也可以手工粘贴。只填 cookie，不要填账号密码。↓↓↓
+  "cookie": "",
+
+  // 你自己的 uid。login.py 会从 c_secure_uid 自动反解，一般不用手填。
+  "uid": 0,
+
+  // 单次 HTTP 请求超时（秒）。
+  "timeout_seconds": 25,
+
+  // 联网刷考核数据时并发几路（默认 4，上限 16）。
+  // 抓一个人的耗时几乎全花在干等站点响应上，4 路 ≈ 快 4 倍；
+  // 每路仍按同样的节奏请求，站点承受的压力不变。设 1 = 一个人一个人抓。
+  "measure_workers": 4,
+
+  // ------------------------------------------------------------- 账号密码登录
+  // cookie 过期时，用账号密码重新登录最省事（浏览器开着也行）。
+  // login.py --password 会自动填 login_user；密码只有你明确要求 --save-password
+  // 时才会存进来。config.json 在 .gitignore 里，不会被提交。
+  // 不想保存密码就留空 —— 每次运行时当场输入。
+  "login_user": "",
+  "login_password": "",
+
+  // 登录表单的字段名。NexusPHP 默认就是 username / password，一般不用改。
+  // 如果你的站改过表单、或登录不在 takelogin.php，让 login.py 抓一次页面会自动认出来，
+  // 认错了就把结果粘到这里覆盖。
+  "login_form": {
+    "action": "",
+    "fields": { "username": "", "password": "" }
+  },
+
+  // ---------------------------------------------------------------- 考核口径
+  // 考核哪几项。可填：
+  //   ["volume"]          只考保种体积
+  //   ["count"]           只考做种数量
+  //   ["volume", "count"] 两个都考（**两项都达标**才算达标）
+  // 填几项，下面每个方案就必须配对应的门槛。
+  "assessment": {
+    "metrics": ["volume"]
+  },
+
+  // ---------------------------------------------------------------- 方案与月薪
+  // id               方案名。必须和考核表「方案」列里的写法完全一致（不区分大小写）
+  // min_volume_tb    该方案要求的保种体积，单位 TB（1024 进制）。metrics 含 volume 时必填
+  // min_count        该方案要求的做种数量（个）。metrics 含 count 时必填
+  // salary           月薪（魔力值）。**口径 = 组员实收**，脚本自动反算你要送出多少
+  "plans": [
+    { "id": "3T",  "min_volume_tb": 3,  "min_count": 300,  "salary": 200000 },
+    { "id": "6T",  "min_volume_tb": 6,  "min_count": 600,  "salary": 400000 },
+    { "id": "12T", "min_volume_tb": 12, "min_count": 1200, "salary": 600000 }
+  ],
+
+  // ------------------------------------------------------------------ 发放
+  "payout": {
+    // 赠送税。接收者实收 = floor(赠送量 × tax_rate − tax_flat)。
+    // 实测：送 450000 → 对方实收 404996，即 0.9 × 450000 − 4。
+    "tax_rate": 0.9,
+    "tax_flat": 4,
+
+    // 两次赠送之间的强制间隔（秒）。站点有限制，通常 10 秒。
+    // 这是硬成本：20 人就是 200 秒。调小没用，会被站点拦。
+    "interval_seconds": 10,
+
+    // ★ 每个周期**每人**能领几次（默认 1）—— 不是「整组共几次」。
+    //   界面「④ 发放与台账」页顶栏那个「每 [月] [1] 次」就是这个值：
+    //   把 N 改成 2，同一个人再点一次「发放」就真的会再发一笔（这就是「每周 2 次」）。
+    //   发满 N 次的人仍然列在清单里，状态显示「发完」，发出前自动跳过。
+    //   要让他重新领 N 次：在清单里选中他 → 右键「重置周期」
+    //   （台账追加一条 reset 记录，历史一条不删）。
+    //   唯一的防超发依据 = 每笔发出前数一遍「这个人本周期已经发了几笔」；
+    //   **不做逐人去重**，所以动手前看清清单里谁还是「待发」。
+    "rounds_per_period": 1,
+
+    // 结算周期单位：month / week / day。只决定界面显示哪个周期键
+    // （month → 2026-09，week → 2026-W37，day → 2026-09-15）。
+    "period_unit": "month",
+
+    // 发放台账文件名（append-only 的 JSONL）。
+    // 「这个人本周期发了几笔」全靠它，别删。
+    "ledger": "payout_ledger.jsonl",
+
+    // 【只影响命令行】不达标 / 没采集到数据的人要不要**出现在清单**里。
+    // false（默认）= 不出现，只在「跳过」里说一句原因。
+    // 界面不受这两个开关影响：GUI 一律把他们列出来，默认不勾、要发自己勾。
+    "include_unqualified": false,
+    "include_untested": false,
+
+    // 赠送时附带的留言。可用变量：{period} {plan_id} {username}
+    "message_template": "保种组 {period} 月薪 · {plan_id}"
+  },
+
+  // -------------------------------------------------------------- 赠送表单映射
+  // action / fields 各站不一样，所以**不猜**：跑 `python probe.py` 会打印出
+  // 可以直接粘贴到这里的内容。
+  //
+  // 成功怎么判？**只看落点 URL**：
+  //   点赠送这个动作   → mybonus.php?action=exchange
+  //   送成功           → 页面跳 mybonus.php?do=transfer
+  //   10 秒内重复点    → 页面跳 mybonus.php?do=duplicated（= 这笔没送出）
+  // 成功响应里**没有任何文字**，所以页面上的字一个都不看 ——
+  // 落点两处都认：响应里的 JS 跳转目标（window.location.href），
+  // 以及跟随 HTTP 重定向后的最终地址。只认这两处取到的 URL，不整页搜串。
+  // 判不出来一律按「没送出去」处理（宁可少发，不会错发）。
+  //
+  // success_url   ：成功落点 URL 里认的串。默认 "do=transfer"，换站要自己核。
+  // duplicate_url ：重复提交/限速的落点串，默认 "do=duplicated"。
+  //                 命中它 = 站点自己说「这笔没送出」→ 唯一允许自动重试的失败。
+  //                 两个都设成 "" = 关闭这条判据（等于没有成功判据，会拒绝真发）。
+  "gift_form": {
+    "action": "",
+    "success_url": "do=transfer",
+    "duplicate_url": "do=duplicated",
+    "fields": {
+      "username": "",
+      "amount": "",
+      "message": ""
+    }
+  }
+}
