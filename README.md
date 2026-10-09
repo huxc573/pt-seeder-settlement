@@ -1,6 +1,6 @@
 # pt-seeder-settlement · PT 保种组工资结算工具
 
-> **当前版本：v1.0.0**（`VERSION` = `1.0.0`　·　2026-09-16 00:35）
+> **当前版本：v1.1.0**（`VERSION` = `1.1.0`　·　2026-10-09 20:01）
 > 变更记录见 [CHANGELOG.md](CHANGELOG.md)
 
 给 PT 站点（NexusPHP 系）保种组组长用的**工资结算 + 发放**工具。
@@ -158,7 +158,7 @@ python pt-seeder-settlement.py    # 图形界面：点点点，四个页签走�
 |---|---|
 | ① 站点与登录 | 填站点地址与接口路径；一键获取 cookie（复制粘贴 / 账密登录）；一键探测赠送表单 |
 | ② 考核与方案 | 考核口径（体积/数量）、各方案门槛与月薪、发放参数、赠送表单 |
-| ③ 算工资 | 选考核表（**选中即离线载入**；**双击**就地改方案 / 用户名 / 检查日期，改完写回考核表；外部改了 roster.csv 就点「重新载入」）→ 联网计算（**4 路并发**，边抓边显示、可勾选重抓重算）→ 出工资表 → 导出 CSV / 复制到剪贴板；**实测结果直接写回考核表**，roster.csv 就是缓存，下次打开自动载入 |
+| ③ 算工资 | 选考核表（**选中即离线载入**；**双击**就地改方案 / 用户名 / 检查日期，改完写回考核表；外部改了 roster.csv 就点「重新载入」；**「打开配置」**直接用系统默认程序打开 roster.csv 改）→ 联网计算（**4 路并发**，边抓边显示、可勾选重抓重算）→ 出工资表 → 导出 CSV / 复制到剪贴板；**实测结果直接写回考核表**，roster.csv 就是缓存，下次打开自动载入 |
 | ④ 发放与台账 | 生成清单（不达标 / 已发也列出、默认不勾）→ 勾选要发的人 → 发放 → 查台账 |
 
 ③ 表格整行上色，扫一眼就知道谁该发、谁的数据没抓到：
@@ -202,6 +202,10 @@ python pt-seeder-settlement.py    # 图形界面：点点点，四个页签走�
 不重试。日志里能看到 `→ 网络中断（…），1 秒后重试` 这种行，说明重试生效了。
 如果那种行很密，把 `measure_workers` 调小（比如 2）。
 
+**③ 页的「打开配置」按钮**用的是系统默认程序（Windows 上等同双击），直接把考核表
+`roster.csv` 甩给 Excel / WPS / 记事本：增删行、改列名、批量粘实测值在表格软件里
+比双击一格顺手得多。程序**不锁**这个文件，改完回来点「重新载入」就同步进来。
+
 ④ 表格的勾选框交互和 ③ 一样：**点格子切换、右键「勾选 / 取消勾选 / 反选 / 全局反选」、
 底部「全选 / 全不选」**。清单最后两列是**「状态」和「结果」**：
 
@@ -214,6 +218,15 @@ python pt-seeder-settlement.py    # 图形界面：点点点，四个页签走�
 
 「状态」「结果」两列的宽度**按内容自己量**（「已发 11 次」比「待发」宽得多），
 不白占一长条，也不会被切掉；长到上限就拖表格底部的横向滚动条。
+
+**③④ 两页都能搜索 / 筛选**（表格上方那一行）：搜索框认 **UID / 方案 / 用户名 / 检查日期**
+（④ 认 UID / 方案 / 用户名），右边的下拉再按状态收窄（③：全部 / 达标 / 不达标 / 未测 / 无方案；
+④：全部 / 待发 / 已发 / 发完 / 不发），后面那句「显示 n / m 行」实时报数。
+
+筛选**只是把行藏起来**（`Treeview.detach`）—— 数据、勾选、工资、台账一个都不动，
+清掉搜索 / 筛选，原来的行和勾一分不少地回来。**「全选」「汇总」「发放」一律按整表口径**，
+不跟着筛选缩水：过滤着点「全选」就是把整张表都勾上。只勾看得见那几行、人却以为全勾了，
+发钱的事不能这么赌。
 
 行色跟 ③ 一样是三色的：**待发橙**（还得你动手，发送中 / 发失败也在这档）→
 **本周期发过 / 本次成功变绿** → 不发红。
@@ -236,7 +249,7 @@ python ledger.py --reset-period --period 2026-09 --uid 10001,10002 --limit 2
 （列出来、状态「发完」、默认不勾），命令行里直接按「发满跳过」处理。
 
 **界面上改的东西会自动写回 `config.json`，注释一行都不会丢**（写前自动备份成
-`config.json.bak`）。窗口标题是**程序名 + 版本号**（`PT 保种组工资工具 v1.0.0`）；
+`config.json.bak`）。窗口标题是**程序名 + 版本号**（`PT 保种组工资工具 v1.1.0`）；
 界面上有任何一格改了、还没保存，标题后面会多一句「配置有改动（未保存）」，存一下就没了。
 
 > 如果你的 Python 没编进 tkinter（少见，官方安装包默认都有），界面会告诉你，
@@ -587,9 +600,9 @@ X = ceil((Y + tax_flat) / tax_rate)
 | `ledger.py --selftest` | **每人已发次数（`times_of`）**、**每周期每人 N 次**、**重置周期（只作废列到的人 / 不删历史 / 重置后重新算数）**、失败人数按 uid 去重、坏行容错 | 39 |
 | `payout.py --selftest` | 表单规格校验（**success_url 不清空即放行**）、**响应判定只看落点 URL（页面文字一律不看）**、**JS 跳转 + HTTP 重定向两处都认**、**失败响应快照**、**发满 N 次逐笔跳过（`skipped_full`）**、**状态文案 `pay_state`（待发 / 已发 n 次 / 发完）**、计划过滤（**不达标未测默认不出现 / 配置开关 / default_pick 看是否发满 / quota 汇总**）、**中文对齐补齐**、dry-run 不写库 | 89 |
 | `pt-seeder-settlement.py --selftest` | 口径复选框、方案表→配置、制表符导出、台账周期汇总、**发放状态三态**、**不加逐人去重（发过的人照样进清单）**、**重置周期只动列到的人** | 56 |
-| `tests/selftest_gui.py` | 真起一次 tkinter 量出来：**④ 清单整表放得进窗口**、**状态/结果列按内容自适应且不 stretch**、**待发 → 已发 n 次 → 发完 → 重置周期 → 待发**整条界面链路、**改 N 边打边生效**、**填错说清原因+按钮变灰**、**勾选按 uid 认回来**、**三态行色**、**③「选中重算」勾了谁就重抓谁（有数据的也重抓）** | 41 |
+| `tests/selftest_gui.py` | 真起一次 tkinter 量出来：**④ 清单整表放得进窗口**、**状态/结果列按内容自适应且不 stretch**、**待发 → 已发 n 次 → 发完 → 重置周期 → 待发**整条界面链路、**改 N 边打边生效**、**填错说清原因+按钮变灰**、**勾选按 uid 认回来**、**三态行色**、**③「选中重算」勾了谁就重抓谁（有数据的也重抓）**、**③④ 搜索 / 筛选只藏行（数据·勾选·工资一分不动）**、**筛选时「全选 / 汇总 / 发放」仍按整表口径（不缩水）**、**带筛选重绘不炸（detach 的行也得删，否则 iid 复用报 Item already exists）**、**③「打开配置」把考核表交给系统默认程序（打桩，不真弹窗）** | 62 |
 
-合计 **557 条断言**，全部离线可跑（`tests/selftest_gui.py` 需要带 tkinter 的解释器）。
+合计 **578 条断言**，全部离线可跑（`tests/selftest_gui.py` 需要带 tkinter 的解释器）。
 
 ---
 
@@ -699,6 +712,7 @@ git tag -a v1.0.0 -m "1.0.0: 一句话概要"
       `ledger.py --selftest` / `tests/selftest_http.py` 全绿
 - [ ] 改了界面布局时跑一次 `python tests/selftest_gui.py`
 - [ ] 构建 Windows exe 并冒烟通过（见 §15.7）
+- [ ] 发版的 exe 已复制成 `pt-seeder-settlement_vX.Y.Z.exe` 再上传（本地那份保持不带版本号）
 - [ ] `git status --short` 中**没有**凭据或运行产物
 - [ ] 已提交并 `git tag -a vX.Y.Z`
 - [ ] 发版后同步标签：`git push origin main --follow-tags`
@@ -721,7 +735,7 @@ git checkout -b hotfix/x v1.0.0   # 从旧版本拉修复分支
 ```bash
 pip install pyinstaller
 pyinstaller --noconfirm --onefile --windowed \
-  --name "pt-seeder-settlement_v$(cat VERSION)" \
+  --name "pt-seeder-settlement" \
   --add-data "VERSION;." \
   --add-data "config.example.json;." \
   --add-data "roster.example.csv;." \
@@ -729,10 +743,22 @@ pyinstaller --noconfirm --onefile --windowed \
   pt-seeder-settlement.py
 ```
 
-- 产物名带版本号，如 `dist/pt-seeder-settlement_v1.0.0.exe`，双击即可运行；
-  **不用管理员权限、不写注册表**。
+**本地编译出的 exe 不带版本号**：`dist/pt-seeder-settlement.exe`，双击即可运行；
+**不用管理员权限、不写注册表**。这样自己反复验证时，文件名不会每次发版就变一个，
+快捷方式、快捷方式旁边的 `config.json` / `roster.csv` 都能一直用同一份。
+
+**发版时才加上版本号**（改文件名即可，exe 内部的版本号是读包里的 `VERSION`，
+和文件名无关）：
+
+```bash
+cp dist/pt-seeder-settlement.exe dist/pt-seeder-settlement_v$(cat VERSION).exe
+# 上传 dist/pt-seeder-settlement_v1.1.0.exe 到 GitHub Release
+```
+
 - 打包后程序把**只读资源**（`VERSION` / `samples` / 两个 example）和**用户数据**
   （`config.json` / `roster.csv` / 台账 / 输出表）分开对待：前者从包内资源读，
   后者固定生成在 **exe 所在目录**（`nexus.RES_ROOT` / `nexus.DATA_ROOT`），
   换台机器拷 exe 时把生成的 `config.json`、`roster.csv` 一起拷走即可。
 - 首次运行同样自举：在 exe 旁边生成 `config.json` 与 `roster.csv`（占位数据）。
+- **重打包只覆盖 exe 本身**，绝不删 `dist/` 目录（里面躺着 exe 旁边跑出来的
+  真实 `config.json` / `roster.csv` / `logs/`，那是用户数据，不是构建产物）。

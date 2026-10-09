@@ -353,6 +353,93 @@ def main():
     gui.settle_mod.build_payroll = real_payroll
     app.run = real_run
 
+    print("\n-- ③④ 搜索 / 筛选：只藏行，不动数据 / 勾选 / 发放 --")
+    vis = lambda t: len(t.get_children())      # 看得见的行（detach 的不算）
+
+    app.pay_kw.set("user002")
+    root.update()
+    check("③ 搜用户名 → 只留 1 行", vis(app.pay_tree), 1)
+    check("③ 计数文案照实报", app.pay_filter_info.get(), "显示 1 / 3 行")
+    app.pay_kw.set("10003")
+    root.update()
+    check("③ 按 UID 搜也能命中", vis(app.pay_tree), 1)
+    app.pay_kw.set("查无此人")
+    root.update()
+    check("③ 搜不到 → 0 行", vis(app.pay_tree), 0)
+    app.pay_kw.set("")
+    app.pay_filter.set("未测")
+    app._apply_pay_filter()
+    check("③ 按考核状态筛「未测」→ 1 行", vis(app.pay_tree), 1)
+    check_true("③ 藏起来的行还在（数据一个没删）",
+               len(app._iid_by_rowno) == 3 and len(app.rows) == 3)
+    app.pay_filter.set("全部")
+    app._apply_pay_filter()
+    check("③ 清筛选 → 3 行全回来", vis(app.pay_tree), 3)
+
+    # ★ 铁律：筛选只管「看」。过滤着点「全选」必须整表都勾上 ——
+    #   只勾看得见那几行，人却以为全勾了，那就是发钱的事故。
+    app.pay_kw.set("user002")
+    root.update()
+    check("③ 过滤后可见 1 行", vis(app.pay_tree), 1)
+    app._check_all(True, app.pay_tree)
+    check("③ 过滤时点「全选」→ 整表 3 人都勾上",
+          len(app._pay_checked_rows()), 3)
+    app.pay_kw.set("")
+    root.update()
+    check("③ 清搜索后勾还在（按整表口径）",
+          [app.pay_tree.item(i, "values")[1]
+           for i in app.pay_tree.get_children()], ["☑", "☑", "☑"])
+
+    app.pay2_kw.set("user001")
+    root.update()
+    check("④ 搜用户名 → 只留 1 行", vis(app.pay_tree2), 1)
+    app.pay2_kw.set("")
+    app.pay2_filter.set("不发")
+    app._apply_pay2_filter()
+    check("④ 筛「不发」→ 未测那 1 行", vis(app.pay_tree2), 1)
+    app.pay2_filter.set("待发")
+    app._apply_pay2_filter()
+    check("④ 筛「待发」→ 1 行", vis(app.pay_tree2), 1)
+    app._check_all(True, app.pay_tree2, app._refresh_payout_summary)
+    app._refresh_payout_summary()
+    root.update()
+    check("④ 汇总按整表报（不被筛选缩小）",
+          "已勾选 2 人" in app.pay_summary2.get(), True)
+    check("④ 发放口径也是整表（筛选不缩水）", len(app._picked_items()), 2)
+
+    # ★ detach 的行不在 get_children() 里 —— 重绘时只看可见行就会漏删，
+    #   漏掉的行还占着 iid，insert(iid=str(i)) 当场报 "Item 0 already exists"。
+    app.pay2_filter.set("待发")
+    app._apply_pay2_filter()
+    try:
+        app._render_payout_tree(keep_checks=True)
+        check("④ 带着筛选重绘不炸", True, True)
+        check("   重绘后勾选按 uid 认回来",
+              [row(0)["pick"], row(1)["pick"]], ["☑", "☑"])
+    except Exception as e:                                  # noqa: BLE001
+        check("④ 带着筛选重绘不炸（%r）" % (e,), False, True)
+    app.pay2_filter.set("全部")
+    app._apply_pay2_filter()
+    check("④ 清筛选 → 2 行全回来", vis(app.pay_tree2), 2)
+
+    print("\n-- ③「打开配置」：交给系统默认程序打开考核表 --")
+    # ★ 打桩，绝不真弹表格软件（那是往别人桌面上扔窗口）
+    opened = []
+    app._open_with_system = lambda p: opened.append(str(p))
+
+    app.v["roster"].set(str(tmp / "nope.csv"))
+    app._open_roster()
+    check("表不在 → 不调系统（只提示）", opened, [])
+
+    csv = tmp / "roster.csv"
+    csv.write_text("UID,方案\n10001,3T\n", encoding="utf-8-sig")
+    app.v["roster"].set(str(csv))
+    app._open_roster()
+    check("表在 → 原样把这个文件交给系统打开", opened, [str(csv)])
+    app._drain()                    # 过程行是走队列回主线程的，手动排一次
+    check_true("过程行说清了「改完点重新载入」",
+               "重新载入" in app.pay_progress.get())
+
     root.destroy()
     td.cleanup()
 

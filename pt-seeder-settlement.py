@@ -32,6 +32,7 @@
 import os
 import queue
 import re
+import subprocess
 import sys
 import threading
 import traceback
@@ -257,12 +258,14 @@ class App:
         self.q = queue.Queue()
         self.busy = False
         self.cfg = {}
+        self.cfg_error = ""               # 配置校验失败的原因（_load_config 填）
         self.settings = None
         self.members = []
         self.rows = []
         self.columns = []
         self.items = []
         self._iid_by_rowno = {}           # ③ 表 row_no → 树 iid（边抓边刷用）
+        self._pay2_created = set()        # ④ 表建过的 iid（含被筛选 detach 藏起来的）
         self._period_err = ""             # ④ 页顶栏「次数」填得不对时的原话
         self.pay_progress = None          # ③ 页的过程显示，_tab_payroll 里创建
         self.pay_menu = None              # ③ 表格的右键菜单
@@ -381,8 +384,14 @@ class App:
             print(f"[!] {cfgp} 读不出来：{e}")
         try:
             self.settings = settle_mod.validate_settings(self.cfg, str(cfgp))
-        except Exception:                              # noqa: BLE001
+            self.cfg_error = ""
+        except Exception as e:                         # noqa: BLE001
             self.settings = None
+            self.cfg_error = str(e) or e.__class__.__name__
+            # 校验失败必须留痕 —— 以前这里静默吞掉，弹窗让「看日志」时日志里
+            # 却一个字都没有（2026-10-09 exe 里踩过）。
+            self._log_to_file(f"[x] 配置校验没过：{self.cfg_error}")
+            self.log(f"[x] 配置校验没过：{self.cfg_error}")
 
     def _updates_or_none(self):
         """界面上的配置值（= 存盘会写进去的那些）；有填错的地方就返回 None。"""
@@ -432,6 +441,12 @@ class App:
             self.log(f"[OK] 已写入 {self.cfg_path.name}：{', '.join(changed)}")
             self.log(f"     （改前的原样备份在 {backup.name}，注释一行没动）")
         self._load_config()
+        if self.settings is None and not silent:
+            # 当场告诉人配置没过 —— 别等到点「联网计算」才弹一句没头没尾的
+            messagebox.showwarning(
+                "已保存，但配置校验没过",
+                (self.cfg_error or "原因见日志。")
+                + "\n\n改对之前，「联网计算 / 发放」都跑不了。")
         self._baseline = self._updates_or_none()       # 存过盘了 = 没有未保存改动
         self._refresh_title()
         # 改完配置立刻重算「发放」能不能点 —— 否则填好字段、保存了
@@ -906,6 +921,8 @@ class App:
         ttk.Button(top, text="浏览…", command=self._pick_roster).pack(side="left")
         ttk.Button(top, text="重新载入", command=self._load_roster_offline).pack(
             side="left", padx=4)
+        ttk.Button(top, text="打开配置", command=self._open_roster).pack(
+            side="left", padx=4)
         ttk.Label(top, text="支持 xlsx / csv",
                   foreground="#666").pack(side="left", padx=8)
 
@@ -926,6 +943,26 @@ class App:
         self.pay_progress = tk.StringVar(value="")
         ttk.Label(f, textvariable=self.pay_progress, foreground="#2a6ea5").pack(
             fill="x", padx=10, pady=(0, 2))
+
+        # 搜索 / 筛选：**只藏行**（detach），数据、勾选、工资一分不动。
+        flt = ttk.Frame(f)
+        flt.pack(fill="x", padx=8, pady=(0, 2))
+        ttk.Label(flt, text="搜索").pack(side="left")
+        self.pay_kw = tk.StringVar()
+        ttk.Entry(flt, textvariable=self.pay_kw, width=18).pack(side="left", padx=4)
+        ttk.Label(flt, text="筛选").pack(side="left", padx=(8, 0))
+        self.pay_filter = tk.StringVar(value="全部")
+        cbf = ttk.Combobox(flt, textvariable=self.pay_filter, width=8,
+                           state="readonly",
+                           values=["全部", "达标", "不达标", "未测", "无方案"])
+        cbf.pack(side="left", padx=4)
+        self.pay_kw.trace_add("write", lambda *_: self._apply_pay_filter())
+        cbf.bind("<<ComboboxSelected>>", lambda *_: self._apply_pay_filter())
+        self.pay_filter_info = tk.StringVar(value="")
+        ttk.Label(flt, textvariable=self.pay_filter_info,
+                  foreground="#666").pack(side="left", padx=8)
+        ttk.Label(flt, text="（UID / 用户名 / 方案 / 检查日期 都能搜；只藏行，不动数据和勾选）",
+                  foreground="#666").pack(side="left")
 
         mid = ttk.Frame(f)
         mid.pack(fill="both", expand=True, padx=8, pady=4)
@@ -966,6 +1003,41 @@ class App:
         if p:
             self.v["roster"].set(p)
             self._load_roster_offline()
+
+    @staticmethod
+    def _open_with_system(p):
+        """把文件交给系统默认程序（Windows 上等同双击）。
+
+        整块抽出来是为了自测能打桩 —— 自测里绝不能真弹出表格软件
+        （那是往别人桌面上扔窗口）。
+        """
+        if hasattr(os, "startfile"):                   # Windows
+            os.startfile(str(p))                       # noqa: S606
+        elif sys.platform == "darwin":
+            subprocess.Popen(["open", str(p)])
+        else:
+            subprocess.Popen(["xdg-open", str(p)])
+
+    def _open_roster(self):
+        """用系统默认程序打开考核表（roster.csv），让人在外面改。
+
+        程序**不锁**这个文件，改完回来点「重新载入」就同步进来；双击就地编辑
+        能改的只是方案 / 用户名 / 检查日期，增删行、改列名、批量填实测值还是
+        在表格软件里顺手 —— 这个按钮就是那条路。
+        """
+        p = Path((self.v["roster"].get() or "").strip())
+        if not p.exists():
+            messagebox.showinfo(
+                "找不到考核表", f"{p}\n\n先用「浏览…」选一个，或点「重新载入」。")
+            return
+        try:
+            self._open_with_system(p)
+        except Exception as e:                         # noqa: BLE001
+            messagebox.showerror("打不开考核表", f"{p}\n\n{e}")
+            return
+        self.log(f"[OK] 已用系统默认程序打开 {p.name} —— "
+                 f"改完记得回来点「重新载入」")
+        self._prog1(f"已打开 {p.name}（外部编辑）—— 改完点「重新载入」")
 
     def _load_roster_offline(self):
         """把考核表**离线载入**进 ③ 表格：选完文件立刻显示；启动时也走这里
@@ -1068,6 +1140,26 @@ class App:
                                          wraplength=1000)
         self.pay_prog2_label.pack(fill="x", padx=8, pady=(0, 2))
 
+        # 搜索 / 筛选：和 ③ 一样只藏行，勾选、台账、发放逻辑都不受影响。
+        flt2 = ttk.Frame(f)
+        flt2.pack(fill="x", padx=8, pady=(0, 2))
+        ttk.Label(flt2, text="搜索").pack(side="left")
+        self.pay2_kw = tk.StringVar()
+        ttk.Entry(flt2, textvariable=self.pay2_kw, width=18).pack(side="left", padx=4)
+        ttk.Label(flt2, text="筛选").pack(side="left", padx=(8, 0))
+        self.pay2_filter = tk.StringVar(value="全部")
+        cb2 = ttk.Combobox(flt2, textvariable=self.pay2_filter, width=6,
+                           state="readonly",
+                           values=["全部", "待发", "已发", "发完", "不发"])
+        cb2.pack(side="left", padx=4)
+        self.pay2_kw.trace_add("write", lambda *_: self._apply_pay2_filter())
+        cb2.bind("<<ComboboxSelected>>", lambda *_: self._apply_pay2_filter())
+        self.pay2_filter_info = tk.StringVar(value="")
+        ttk.Label(flt2, textvariable=self.pay2_filter_info,
+                  foreground="#666").pack(side="left", padx=8)
+        ttk.Label(flt2, text="（状态筛「已发」= 本周期发过；只藏行，不动勾选）",
+                  foreground="#666").pack(side="left")
+
         mid = ttk.Frame(f)
         mid.pack(fill="both", expand=True, padx=8, pady=4)
         cols = tuple(c for c, _, _ in PAY2_COLUMNS)
@@ -1152,10 +1244,22 @@ class App:
         if after:
             after()
 
+    def _all_row_iids(self, tree):
+        """整张表的行 iid —— **含被搜索 / 筛选 detach 藏起来的行**。
+
+        筛选只该管「看」，不该管「选 / 汇总 / 发」：过滤着点「全选」时，
+        若只勾看得见那几行，人却以为整表都勾上了 —— 发钱的事不能赌。
+        """
+        if tree is self.pay_tree:
+            return [i for i in self._iid_by_rowno.values() if tree.exists(i)]
+        if tree is self.pay_tree2:
+            return [i for i in self._pay2_created if tree.exists(i)]
+        return list(tree.get_children())
+
     def _check_all(self, on, tree=None, after=None):
-        """整列打勾 / 取消（两个表格共用）。"""
+        """整列打勾 / 取消（两个表格共用）—— 无视筛选，整表都动。"""
         tree = tree if tree is not None else self.pay_tree2
-        for iid in tree.get_children():
+        for iid in self._all_row_iids(tree):
             vals = list(tree.item(iid, "values"))
             if len(vals) < 2:
                 continue
@@ -1192,7 +1296,7 @@ class App:
                 after()
 
         def apply_all(mode):
-            self._flip_checks(tree, tree.get_children(), mode)
+            self._flip_checks(tree, self._all_row_iids(tree), mode)
             if after:
                 after()
 
@@ -1231,8 +1335,9 @@ class App:
             tree.item(iid, values=vals)
 
     def _refresh_payout_summary(self):
-        if not self.pay_tree2.get_children():
+        if not self.items:
             return                    # ④ 还没生成清单，别动那句初始提示
+        # ★ 按 self.items 判、不按可见行判：筛选显示 0 行时也要照实报「已勾选 N 人」
         try:
             limit = self._pay_freq()
             self._period_err = ""
@@ -1278,12 +1383,14 @@ class App:
         return None
 
     def _picked_items(self):
-        """④ 清单里打了勾的人。状态只认表格本身，没有第二份副本。"""
+        """④ 清单里打了勾的人（**含被筛选藏起来的**）。状态只认表格本身，没有第二份副本。"""
         picked = []
-        for iid in self.pay_tree2.get_children():
-            vals = self.pay_tree2.item(iid, "values")
-            if len(vals) > 1 and vals[1] == "☑":
-                picked.append(self.items[int(iid)])
+        t = self.pay_tree2
+        for iid in self._all_row_iids(t):
+            vals = t.item(iid, "values")
+            j = int(iid) if str(iid).isdigit() else -1
+            if len(vals) > 1 and vals[1] == "☑" and 0 <= j < len(self.items):
+                picked.append(self.items[j])
         return picked
 
     def _pay2_state(self, it):
@@ -1326,15 +1433,24 @@ class App:
         t = self.pay_tree2
         old_uids = set()
         if keep_checks:
-            for iid in t.get_children():
+            # 口径同 _all_row_iids：被筛选藏起来的行也得认，否则重绘后勾选丢
+            for iid in self._pay2_created:
+                if not t.exists(iid):
+                    continue
                 vals = t.item(iid, "values")
                 j = int(iid) if str(iid).isdigit() else -1
                 if (len(vals) > 1 and vals[1] == "☑"
                         and 0 <= j < len(self.items)):
                     old_uids.add(self.items[j]["uid"])
-        t.delete(*t.get_children())
+        # ★ detach 藏起来的行不在 get_children() 里 —— 只删可见行会漏掉它们，
+        #   漏掉的行还占着 iid，下面 insert(iid=str(i)) 会直接报 Item 0 already exists
+        dead = [i for i in self._pay2_created if t.exists(i)]
+        if dead:
+            t.delete(*dead)
+        self._pay2_created = set()
         for i, it in enumerate(self.items):
             iid = str(i)
+            self._pay2_created.add(iid)
             # 勾选只认表格本身（没有第二份副本），重绘时按 uid 认回来 ——
             # 不能按行号认：清单顺序一变，勾就会落到别人头上（发钱的事，不能赌）
             pick = (it["uid"] in old_uids if keep_checks
@@ -1349,15 +1465,26 @@ class App:
         # 全列按内容自适应：「已发 2 次」比「待发」宽，长报错也比短的长 ——
         # 写死宽度不是白占一长条就是被切掉（超长到上限就拖横向滚动条）
         self._fit_pay2_cols()
+        self._apply_pay2_filter()
 
     def _fit_pay2_cols(self):
-        """④ 清单全列按内容自适应：表头 + 每行都量一遍。"""
+        """④ 清单全列按内容自适应：表头 + 每行都量一遍。
+        ★ 量的是 **self.items 全量** —— 筛选藏行时列宽不抖。"""
         t = self.pay_tree2
         keys = [c for c, _, _ in PAY2_COLUMNS]
         texts = {k: [t.heading(k)["text"]] for k in keys}
-        for iid in t.get_children():
-            for k, v in zip(keys, t.item(iid, "values")):
-                texts[k].append(v)
+        for i, it in enumerate(self.items, 1):
+            row = {
+                "no": str(i), "pick": "☑", "uid": str(it["uid"]),
+                "plan": it["plan"] or "", "username": it["username"] or "-",
+                "salary": str(it["salary"] or ""),
+                "amount": f"{it['amount']:,}" if it.get("amount") else "",
+                "status": it.get("status") or "",
+                "state": it.get("state") or "",
+                "result": it.get("result") or "",
+            }
+            for k in keys:
+                texts[k].append(row.get(k, ""))
         for k in keys:
             lo, hi = {"state": (PAY2_STATE_MIN, PAY2_STATE_MAX),
                       "result": (PAY2_RESULT_MIN, PAY2_RESULT_MAX)}.get(
@@ -1389,6 +1516,7 @@ class App:
         vals[PAY2_RESULT_IDX] = result
         t.item(iid, values=vals, tags=(tag,))
         self._fit_pay2_cols()       # 状态 / 结果变长了就把列宽跟着撑开
+        self._apply_pay2_filter()
 
     def _reset_period(self, iids=None):
         """
@@ -1460,7 +1588,10 @@ class App:
         if need_config and not self.save_config(silent=True):
             return
         if need_config and self.settings is None:
-            messagebox.showerror("配置不对", "配置校验没过，看日志。")
+            messagebox.showerror(
+                "配置不对",
+                "配置校验没过，任务没法跑：\n\n"
+                + (self.cfg_error or "原因见日志。"))
             return
         self.snap = self._snapshot()
 
@@ -1940,11 +2071,12 @@ class App:
         key = keys[int(col[1:]) - 1]
         if key not in self._PAY_EDIT_COLS:
             return
-        i = self.pay_tree.index(iid)
-        if i >= len(self.rows):
+        # 行号按 **iid 反查**，不能用 tree.index()：搜索 / 筛选藏着行时
+        # index() 只数可见行，序号会错位 —— 那就改到别人头上了。
+        rno = next((k for k, v in self._iid_by_rowno.items() if v == iid), None)
+        if rno is None:
             return
-        m = next((x for x in self.members
-                  if x.row_no == self.rows[i]["row_no"]), None)
+        m = next((x for x in self.members if x.row_no == rno), None)
         if m is None:
             return
         bbox = self.pay_tree.bbox(iid, col)
@@ -2003,34 +2135,44 @@ class App:
         # 整行上色：达标绿 / 不达标红 / 未测橙（一眼看出谁该发、谁数据没抓到）
         for tag, color in ROW_COLORS.items():
             t.tag_configure(tag, foreground=color)
-        t.delete(*t.get_children())
+        # 同 _render_payout_tree：连被筛选 detach 藏起来的旧行一起删干净
+        dead = [i for i in self._iid_by_rowno.values() if t.exists(i)]
+        if dead:
+            t.delete(*dead)
         self._iid_by_rowno = {}
         for i, r in enumerate(self.rows, 1):
             iid = t.insert("", "end", tags=(status_tag(r["status"]),),
                            values=[i, "☐"] + [_cell(r.get(k)) for k, _ in self.columns])
             self._iid_by_rowno[r["row_no"]] = iid
         self._fit_pay_cols()
+        self._apply_pay_filter()
 
     def _fit_pay_cols(self):
         """③ 全列按内容自适应：表头 + 每行都量一遍 —— 内容短的列不白占屏，
-        长的给到上限（「结果」列上限更高），再长拖横向滚动条。"""
+        长的给到上限（「结果」列上限更高），再长拖横向滚动条。
+        ★ 量的是 **self.rows 全量**（不是树里可见的行）：搜索 / 筛选藏着行时
+        列宽不能跟着抖。"""
         if not self.columns:
             return
         t = self.pay_tree
         keys = ["no", "pick"] + [k for k, _ in self.columns]
         texts = {k: [t.heading(k)["text"]] for k in keys}
-        for iid in t.get_children():
-            for k, v in zip(keys, t.item(iid, "values")):
-                texts[k].append(v)
+        for i, r in enumerate(self.rows, 1):
+            texts["no"].append(str(i))
+            texts["pick"].append("☑")
+            for k, _h in self.columns:
+                texts[k].append(_cell(r.get(k)))
         for k in keys:
             lo, hi = ((PAY_NOTE_MIN, PAY_NOTE_MAX) if k == "note"
                       else (40, PAY_COL_MAX))
             t.column(k, width=fit_column_width(texts[k], lo, hi))
 
     def _pay_checked_rows(self):
+        """③ 打了勾的行（**含被筛选藏起来的**）—— 勾选不因筛选而缩水。"""
+        t = self.pay_tree
         out = []
-        for iid in self.pay_tree.get_children():
-            vals = self.pay_tree.item(iid, "values")
+        for iid in self._all_row_iids(t):
+            vals = t.item(iid, "values")
             if len(vals) > 1 and vals[1] == "☑":
                 out.append(iid)
         return out
@@ -2051,13 +2193,66 @@ class App:
                 n += 1
         return n
 
+    # ---- 搜索 / 筛选（③④ 通用：detach 藏行，数据和勾选一个都不动）
+
+    def _apply_pay_filter(self):
+        """③ 按关键字（UID / 方案 / 用户名 / 检查日期）+ 考核状态过滤显示。"""
+        if not hasattr(self, "pay_kw"):
+            return
+        kw = self.pay_kw.get().strip().lower()
+        want = self.pay_filter.get()
+        total = len(self.rows)
+        shown = 0
+        for r in self.rows:
+            iid = self._iid_by_rowno.get(r["row_no"])
+            if iid is None or not self.pay_tree.exists(iid):
+                continue
+            ok = want == "全部" or r["status"] == want
+            if ok and kw:
+                hay = " ".join(str(r.get(k) or "")
+                               for k in ("uid", "plan_id", "username", "check_raw"))
+                ok = kw in hay.lower()
+            if ok:
+                self.pay_tree.reattach(iid, "", "end")   # 按原顺序（rows 顺序）重挂
+                shown += 1
+            else:
+                self.pay_tree.detach(iid)
+        self.pay_filter_info.set(f"显示 {shown} / {total} 行")
+
+    def _apply_pay2_filter(self):
+        """④ 按关键字（UID / 方案 / 用户名）+ 发放状态过滤显示。"""
+        if not hasattr(self, "pay2_kw"):
+            return
+        kw = self.pay2_kw.get().strip().lower()
+        want = self.pay2_filter.get()
+        total = len(self.items)
+        shown = 0
+        for i, it in enumerate(self.items):
+            iid = str(i)
+            if not self.pay_tree2.exists(iid):
+                continue
+            state = it.get("state") or ""
+            ok = want == "全部" or state.startswith(want)
+            if ok and kw:
+                hay = " ".join(str(it.get(k) or "")
+                               for k in ("uid", "plan", "username"))
+                ok = kw in hay.lower()
+            if ok:
+                self.pay_tree2.reattach(iid, "", "end")
+                shown += 1
+            else:
+                self.pay_tree2.detach(iid)
+        self.pay2_filter_info.set(f"显示 {shown} / {total} 行")
+
     def _payupdate_row(self, m):
         """联网计算边抓边刷：一个人的实测回来就把那一行更新掉。"""
         if not self.rows:
             return
         for i, r in enumerate(self.rows):
             if r["row_no"] == m.row_no:
-                row, _ = settle_mod.build_payroll([m], self.settings)
+                row, errs = settle_mod.build_payroll([m], self.settings)
+                for e in errs:                    # 单行改坏（如方案瞎填）要说出来
+                    self.log("[x] " + e)
                 if row:
                     self.rows[i] = row[0]
                     iid = self._iid_by_rowno.get(m.row_no)
@@ -2070,13 +2265,30 @@ class App:
                             + [_cell(row[0].get(k)) for k, _ in self.columns])
                 break
         self._fit_pay_cols()
+        self._apply_pay_filter()
         self._set_pay_summary()
 
     def _payreset_rows(self, members):
-        """联网计算开始前先摆一版占位表（未测），之后逐行刷新。"""
+        """摆一版占位表（启动 / 重新载入 / 联网计算前都会走）。
+        有数据没通过校验（典型：方案列填成了用户名、方案不在 config.json 的
+        plans 里）就**整表不载入**：弹窗列出问题行，表格保持原样 ——
+        别让一张算不出来的表静默摆上来，也不把上一份好数据冲掉。"""
         self.members = members
         self.columns = settle_mod.build_columns(self.settings["metrics"])
-        self.rows, _ = settle_mod.build_payroll(members, self.settings)
+        rows, errors = settle_mod.build_payroll(members, self.settings)
+        if errors:
+            for e in errors:
+                self.log("[x] " + e)
+            head = "\n".join(errors[:6])
+            more = f"\n…… 共 {len(errors)} 行有问题" if len(errors) > 6 else ""
+            messagebox.showwarning(
+                "考核表数据不对，没载入",
+                f"有 {len(errors)} 行没通过校验，表格保持原样没载入。\n"
+                "常见原因：方案列填成了用户名，或方案没写进 config.json 的 plans。\n"
+                "改好考核表再点「重新载入」。\n\n" + head + more)
+            self._prog1(f"[x] 考核表有 {len(errors)} 行数据不对，没载入")
+            return
+        self.rows = rows
         self._fill_pay_tree()
         self._set_pay_summary()
 
